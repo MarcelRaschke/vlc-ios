@@ -59,7 +59,7 @@ Mostly for debugging or advanced users, you might want to have a custom local VL
 
     `./compileAndBuildVLCKit.sh -a ${MYARCH}`
 
-    MYARCH can be `i386` `x86_64` `armv7` `armv7s` or `aarch64`.
+    MYARCH can be `x86_64` or `aarch64`.
 
     Add `-d` for a debug build (to have valid stack straces and asserts).
 
@@ -127,7 +127,7 @@ If you have any question or if you're not sure it's actually an issue, please vi
 
 You have encountered an issue and wish to report it to the VLC dev team?
 
-You can create one on our [GitLab](https://code.videolan.org/videolan/vlc-ios/issues) or on our [bug tracker](https://trac.videolan.org/vlc/).
+You can create one on our [GitLab](https://code.videolan.org/videolan/vlc-ios/issues).
 
 Before creating an issue or ticket, please double check for duplicates!
 

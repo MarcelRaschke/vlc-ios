@@ -5,6 +5,12 @@
  * Copyright (c) 2013-2020 VideoLAN. All rights reserved.
  *
  * Authors: Swapnanil Dhol <swapnanildhol # gmail.com>
+ *          Soomin Lee < bubu@mikan.io >
+ *          Carola Nitz <caro # videolan.org>
+ *          Edgar Fouillet <vlc # edgar.fouillet.eu>
+ *          Diogo Simao Marques <dogo@videolabs.io>
+ *          Felix Paul Kühne <fkuehne # videolan.org>
+ *          Andrew Breckenridge <asbreckenridge@me.com>
  *
  * Refer to the COPYING file of the official project for license.
  *****************************************************************************/
@@ -17,7 +23,6 @@ extension Notification.Name {
 }
 
 class SettingsController: UITableViewController {
-
     private let cellReuseIdentifier = "settingsCell"
     private let sectionHeaderReuseIdentifier = "sectionHeaderReuseIdentifier"
     private let sectionFooterReuseIdentifier = "sectionFooterReuseIdentifier"
@@ -29,6 +34,16 @@ class SettingsController: UITableViewController {
     private var settingsBundle = Bundle()
     private var isBackingUp = false
     private let isLabActivated: Bool = true
+
+    /// the source of all data.
+    private var settingsSections: [SettingsSection] = [] {
+        didSet {
+            // only reload when it's actually different
+            if oldValue != settingsSections {
+                tableView.reloadData()
+            }
+        }
+    }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
         return PresentationTheme.current.colors.statusBarStyle
@@ -56,6 +71,7 @@ class SettingsController: UITableViewController {
         registerTableViewClasses()
         setupBarButton()
         addObservers()
+        reloadSettingsSections()
     }
 
 // MARK: - Setup Functions
@@ -68,6 +84,7 @@ class SettingsController: UITableViewController {
         self.tabBarItem.accessibilityIdentifier = VLCAccessibilityIdentifier.settings
         tableView.separatorStyle = .none
         tableView.cellLayoutMarginsFollowReadableWidth = false //Fix for iPad
+        tableView.verticalScrollIndicatorInsets = UIEdgeInsets(top: -1, left: 0, bottom: 0, right: 0)
         view.backgroundColor = PresentationTheme.current.colors.background
         actionSheet.modalPresentationStyle = .custom
         guard let unsafeSettingsBundle = getSettingsBundle() else { return }
@@ -75,6 +92,10 @@ class SettingsController: UITableViewController {
     }
 
     private func addObservers() {
+        notificationCenter.addObserver(self,
+                                       selector: #selector(reloadSettingsSections),
+                                       name: UserDefaults.didChangeNotification,
+                                       object: nil)
         notificationCenter.addObserver(self,
                                        selector: #selector(themeDidChange),
                                        name: .VLCThemeDidChangeNotification,
@@ -107,12 +128,12 @@ class SettingsController: UITableViewController {
         navigationItem.leftBarButtonItem = aboutBarButton
         self.navigationItem.leftBarButtonItem?.accessibilityIdentifier = VLCAccessibilityIdentifier.about
 
-        let tipJarBarButton = UIBarButtonItem(title: NSLocalizedString("GIVE_TIP", comment: ""),
+        let docButton = UIBarButtonItem(title: NSLocalizedString("SETTINGS_DOCUMENTATION", comment: ""),
                                              style: .plain,
                                              target: self,
-                                             action: #selector(showTipJar))
-        aboutBarButton.tintColor = PresentationTheme.current.colors.orangeUI
-        navigationItem.rightBarButtonItem = tipJarBarButton
+                                             action: #selector(showDocumentation))
+        docButton.tintColor = PresentationTheme.current.colors.orangeUI
+        navigationItem.rightBarButtonItem = docButton
     }
 
     private func setNavBarAppearance() {
@@ -126,28 +147,22 @@ class SettingsController: UITableViewController {
 // MARK: - Observer & BarButton Actions
 
     @objc private func showAbout() {
-        if #available(iOS 10, *) {
-            ImpactFeedbackGenerator().selectionChanged()
-        }
+        ImpactFeedbackGenerator().selectionChanged()
         let aboutController = AboutController()
         let aboutNavigationController = AboutNavigationController(rootViewController: aboutController)
         present(aboutNavigationController, animated: true)
     }
 
-    @objc private func showTipJar() {
-        if #available(iOS 10, *) {
-            ImpactFeedbackGenerator().selectionChanged()
-        }
-        let vc = StoreViewController(nibName: "VLCStoreViewController", bundle: nil)
-        let storeVC = UINavigationController(rootViewController: vc)
-        present(storeVC, animated: true, completion: nil)
+    @objc private func showDocumentation() {
+        ImpactFeedbackGenerator().selectionChanged()
+        UIApplication.shared.open(URL(string: "https://docs.videolan.me/vlc-user/ios/3.X/en/index.html")!)
     }
 
     @objc private func themeDidChange() {
         self.view.backgroundColor = PresentationTheme.current.colors.background
         setNavBarAppearance()
         self.setNeedsStatusBarAppearanceUpdate()
-        self.tableView.reloadData() // When theme changes hide the black theme section if needed
+        self.reloadSettingsSections() // When theme changes hide the black theme section if needed
     }
 
     @objc private func miniPlayerIsShown() {
@@ -165,11 +180,20 @@ class SettingsController: UITableViewController {
     }
 
 // MARK: - Helper Functions
+    private func showDonation(indexPath: IndexPath) {
+        if #available(iOS 10, *) {
+            ImpactFeedbackGenerator().selectionChanged()
+        }
+        let donationVC = VLCDonationViewController(nibName: "VLCDonationViewController", bundle: nil)
+        let donationNC = UINavigationController(rootViewController: donationVC)
+        donationNC.modalPresentationStyle = .popover
+        donationNC.modalTransitionStyle = .flipHorizontal
+        donationNC.popoverPresentationController?.sourceView = tableView.cellForRow(at: indexPath)
+        present(donationNC, animated: true, completion: nil)
+    }
 
     private func forceRescanAlert() {
-        if #available(iOS 10, *) {
-            NotificationFeedbackGenerator().warning()
-        }
+        NotificationFeedbackGenerator().warning()
         let alert = UIAlertController(title: NSLocalizedString("FORCE_RESCAN_TITLE", comment: ""),
                                       message: NSLocalizedString("FORCE_RESCAN_MESSAGE", comment: ""),
                                       preferredStyle: .alert)
@@ -179,10 +203,8 @@ class SettingsController: UITableViewController {
         alert.addAction(UIAlertAction(title: NSLocalizedString("BUTTON_RESCAN", comment: ""),
                                       style: .destructive,
                                       handler: { _ in
-                                        if #available(iOS 10, *) {
-                                            ImpactFeedbackGenerator().selectionChanged()
-                                        }
-                                        self.forceRescanLibrary()
+            ImpactFeedbackGenerator().selectionChanged()
+            self.forceRescanLibrary()
         }))
         present(alert, animated: true, completion: nil)
     }
@@ -195,37 +217,41 @@ class SettingsController: UITableViewController {
     }
 
     private func openPrivacySettings() {
-        if #available(iOS 10.0, *) {
-            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-            UIApplication.shared.open(url,
-                                      options: [:],
-                                      completionHandler: nil)
-        }
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
-    private func showActionSheet(for sectionType: SectionType?) {
-        guard let sectionType = sectionType else { return }
-        guard !sectionType.containsSwitch else { return }
-        guard let preferenceKey = sectionType.preferenceKey else {
-            assertionFailure("SettingsController: No Preference Key Available.")
-            return
-        }
-        showActionSheet(preferenceKey: preferenceKey)
-    }
-
-    private func showActionSheet(preferenceKey: String?) {
+    private func showActionSheet(title: String, preferenceKey: String) {
+        specifierManager.playbackTitle = title
         specifierManager.preferenceKey = preferenceKey
         specifierManager.settingsBundle = settingsBundle
         actionSheet.delegate = specifierManager
         actionSheet.dataSource = specifierManager
+
+        if preferenceKey == MainOptions.appearance.preferenceKey ||
+            preferenceKey == GenericOptions.automaticallyPlayNextItem.preferenceKey {
+            specifierManager.delegate = self
+        }
+
+        var numberOfColumns: CGFloat = 1
+        if preferenceKey == GenericOptions.defaultPlaybackSpeed.preferenceKey ||
+            preferenceKey == SubtitlesOptions.fontColor.preferenceKey {
+            numberOfColumns = 2
+        }
+        actionSheet.numberOfColums = numberOfColumns
+
         present(actionSheet, animated: false) {
-            self.actionSheet.collectionView.selectItem(at: self.specifierManager.selectedIndex, animated: false, scrollPosition: .centeredVertically)
+            if preferenceKey != kVLCAutomaticallyPlayNextItem {
+                self.actionSheet.collectionView.selectItem(at: self.specifierManager.selectedIndex, animated: false, scrollPosition: .centeredVertically)
+            }
         }
     }
 
-    private func playHaptics(sectionType: SectionType?) {
-        guard let sectionType = sectionType else { return }
-        if #available(iOS 10, *), !sectionType.containsSwitch {
+    private func playHaptics(settingsItem: SettingsItem) {
+        switch settingsItem.action {
+        case .toggle:
+            break
+        default:
             ImpactFeedbackGenerator().selectionChanged()
         }
     }
@@ -233,210 +259,108 @@ class SettingsController: UITableViewController {
     private func exportMediaLibrary() {
         self.mediaLibraryService.exportMediaLibrary()
     }
+
+    private func displayResetAlert() {
+        let alert = UIAlertController(title: NSLocalizedString("SETTINGS_RESET_TITLE", comment: ""),
+                                      message: NSLocalizedString("SETTINGS_RESET_MESSAGE", comment: ""),
+                                      preferredStyle: .alert)
+
+        let cancelAction = UIAlertAction(title: NSLocalizedString("BUTTON_CANCEL", comment: ""),
+                                         style: .cancel)
+        let resetAction = UIAlertAction(title: NSLocalizedString("BUTTON_RESET", comment: ""),
+                                        style: .destructive) { _ in
+            self.resetOptions()
+        }
+
+        alert.addAction(cancelAction)
+        alert.addAction(resetAction)
+
+        present(alert, animated: true)
+    }
+
+    private func resetOptions() {
+        // note that [NSUserDefaults resetStandardUserDefaults] will NOT correctly reset to the defaults
+        let appDomain = Bundle.main.bundleIdentifier!
+        UserDefaults().removePersistentDomain(forName: appDomain)
+    }
 }
 
 extension SettingsController {
 
+    @objc func reloadSettingsSections() {
+        settingsSections = SettingsSection
+            .sections(isLabActivated: isLabActivated,
+                      isBackingUp: isBackingUp,
+                      isForwardBackwardEqual: userDefaults.bool(forKey: kVLCSettingPlaybackForwardBackwardEqual),
+                      isTapSwipeEqual: userDefaults.bool(forKey: kVLCSettingPlaybackTapSwipeEqual))
+    }
+
     override func numberOfSections(in tableView: UITableView) -> Int {
-        var numberOfSections = SettingsSection.allCases.count
-        // Remove the last section if the lab is deactivated
-        if isLabActivated == false {
-            numberOfSections = numberOfSections - 1
-        }
-        return numberOfSections
+        settingsSections.count
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        switch section {
-        case 0:
-            return MainOptions.allCases.count
-        case 1:
-            return GenericOptions.allCases.count
-        case 2:
-            return PrivacyOptions.allCases.count
-        case 3:
-            return PlaybackControlOptions.allCases.count
-        case 4:
-            return VideoOptions.allCases.count
-        case 5:
-            return SubtitlesOptions.allCases.count
-        case 6:
-            return AudioOptions.allCases.count
-        case 7:
-            return CastingOptions.allCases.count
-        case 8:
-            return MediaLibraryOptions.allCases.count
-        case 9:
-            return NetworkOptions.allCases.count
-        case 10:
-            return Lab.allCases.count
-        default:
-            return 0
-        }
+        settingsSections[section].items.count
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        if indexPath == [SettingsSection.privacy.rawValue, PrivacyOptions.enableBiometrics.rawValue] && !userDefaults.bool(forKey: kVLCSettingPasscodeOnKey) {
-            //If the passcode lock is on we return a default UITableViewCell else
-            //while hiding the biometric option row using a cell height of 0
-            //constraint warnings will be printed to the console since the cell height (0)
-            //collapses on given constraints (Top, leading, trailing, Bottom of StackView to Cell)
-            return UITableViewCell()
-        }
         guard let cell = tableView.dequeueReusableCell(withIdentifier: cellReuseIdentifier, for: indexPath) as? SettingsCell else {
             return UITableViewCell()
         }
-        cell.settingsBundle = settingsBundle
-        guard let section = SettingsSection(rawValue: indexPath.section) else {
-            return UITableViewCell()
-        }
-        switch section {
-        case .main:
-            let main = MainOptions(rawValue: indexPath.row)
-            let brightThemeForced = userDefaults.integer(forKey: kVLCSettingAppTheme) == kVLCSettingAppThemeBright
-            if indexPath.row == MainOptions.blackTheme.rawValue {
-                if brightThemeForced {
-                    //If the user wants the bright theme, we hide black theme settings
-                    cell.isHidden = true
-                }
-            }
-            cell.sectionType = main
-            cell.blackThemeSwitchDelegate = self
-        case .generic:
-            let generic = GenericOptions(rawValue: indexPath.row)
-            cell.sectionType = generic
-        case .privacy:
-            let privacy = PrivacyOptions(rawValue: indexPath.row)
-            let isPasscodeOn = userDefaults.bool(forKey: kVLCSettingPasscodeOnKey)
-            if indexPath.row == PrivacyOptions.enableBiometrics.rawValue {
-                if !isPasscodeOn || privacy?.preferenceKey == nil {
-                    //If Passcode Lock Switch is off or Biometric Row Preference Key returns nil
-                    //We hide the cell
-                    cell.isHidden = true
-                }
-            }
-            cell.sectionType = privacy
-            cell.passcodeSwitchDelegate = self
-            cell.medialibraryHidingSwitchDelegate = self
-        case .gestureControl:
-            let gestureControlOptions = PlaybackControlOptions(rawValue: indexPath.row)
-            cell.sectionType = gestureControlOptions
-        case .video:
-            let videoOptions = VideoOptions(rawValue: indexPath.row)
-            cell.sectionType = videoOptions
-        case .subtitles:
-            let subtitlesOptions = SubtitlesOptions(rawValue: indexPath.row)
-            cell.sectionType = subtitlesOptions
-        case .audio:
-            let audioOptions = AudioOptions(rawValue: indexPath.row)
-            cell.sectionType = audioOptions
-        case .casting:
-            let castingOptions = CastingOptions(rawValue: indexPath.row)
-            cell.sectionType = castingOptions
-        case .mediaLibrary:
-            let mediaLibOptions = MediaLibraryOptions(rawValue: indexPath.row)
-            if indexPath.row == MediaLibraryOptions.forceVLCToRescanTheMediaLibrary.rawValue {
-                cell.mainLabel.textColor = PresentationTheme.current.colors.orangeUI
-            }
-            cell.mediaLibraryBackupSwitchDelegate = self
-            cell.medialibraryDisableGroupingSwitchDelegate = self
-            if indexPath.row == MediaLibraryOptions.includeMediaLibInDeviceBackup.rawValue {
-                if isBackingUp {
-                    cell.accessoryView = .none
-                    cell.accessoryType = .none 
-                    cell.activityIndicator.startAnimating()
-                } else {
-                    cell.activityIndicator.stopAnimating()
-                }
-                cell.showsActivityIndicator = isBackingUp
-            }
-            cell.sectionType = mediaLibOptions
-            if indexPath.row == 0 {
-                cell.accessoryView = .none
-                cell.accessoryType = .none
-            }
-        case .network:
-            let networkOptions = NetworkOptions(rawValue: indexPath.row)
-            cell.sectionType = networkOptions
-        case .lab:
-            let lab = Lab(rawValue: indexPath.row)
-            cell.sectionType = lab
-            if indexPath.row == 1 {
-                cell.accessoryView = .none
-                cell.accessoryType = .none
-            }
-        }
+
+        cell.delegate = self
+
+        let section = settingsSections[indexPath.section]
+        let settingsItem = section.items[indexPath.row]
+        cell.settingsItem = settingsItem
+
         return cell
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard let section = SettingsSection(rawValue: indexPath.section) else { return }
-        if section == .main && indexPath.row == 0 {
+
+        let section = settingsSections[indexPath.section]
+        let settingsItem = section.items[indexPath.row]
+
+        playHaptics(settingsItem: settingsItem)
+
+        switch settingsItem.action {
+        case .isLoading:
+            break
+        case .toggle:
+            break // we get a notification from the switch and do our work there
+        case .openPrivacySettings:
             openPrivacySettings()
-            return
-        }
-        if section == .mediaLibrary && indexPath.row == 0 {
+        case .forceRescanAlert:
             forceRescanAlert()
-            return
-        }
-        if section == .lab && indexPath.row == 1 {
+        case .exportMediaLibrary:
             exportMediaLibrary()
-            return
-        }
-        switch section {
-        case .main:
-            let mainSection = MainOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: mainSection)
-            showActionSheet(for: mainSection)
-        case .generic:
-            let genericSection = GenericOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: genericSection)
-            showActionSheet(for: genericSection)
-        case .privacy:
-            let privacySection = PrivacyOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: privacySection)
-        case .gestureControl:
-            break
-        case .video:
-            let videoSection = VideoOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: videoSection)
-            showActionSheet(for: videoSection)
-        case .subtitles:
-            let subtitleSection = SubtitlesOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: subtitleSection)
-            showActionSheet(for: subtitleSection)
-        case .audio:
-            break
-        case .casting:
-            let castingSection = CastingOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: castingSection)
-            showActionSheet(for: castingSection)
-        case .mediaLibrary:
-            break
-        case .network:
-            let networkSection = NetworkOptions(rawValue: indexPath.row)
-            playHaptics(sectionType: networkSection)
-            showActionSheet(for: networkSection)
-        case .lab:
-            break
+        case .donation:
+            showDonation(indexPath: indexPath)
+        case .displayResetAlert:
+            displayResetAlert()
+        case .showActionSheet(let title, let preferenceKey, _):
+            showActionSheet(title: title, preferenceKey: preferenceKey)
         }
     }
 
     override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         guard let headerView = tableView.dequeueReusableHeaderFooterView( withIdentifier: sectionHeaderReuseIdentifier) as? SettingsHeaderView else { return nil }
-        guard let description = SettingsSection.init(rawValue: section)?.description else { return nil }
-        headerView.sectionHeaderLabel.text = settingsBundle.localizedString(forKey: description, value: description, table: "Root")
+        guard let title = settingsSections[section].title else { return nil }
+        headerView.sectionHeaderLabel.text = title
         return headerView
     }
 
     override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
         guard let footerView = tableView.dequeueReusableHeaderFooterView(withIdentifier: sectionFooterReuseIdentifier) as? SettingsFooterView else { return nil }
-        return section == 8 ? nil : footerView
+
+        // Do not display a separator for the last section
+        return section == tableView.numberOfSections - 1 ? nil : footerView
     }
 
     override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        return section == 0 ? 0 : 64
+        return section >= 2 ? 64 : 0
     }
 
     override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
@@ -448,23 +372,10 @@ extension SettingsController {
     }
 
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        let automaticDimension = UITableView.automaticDimension
-        if indexPath == [SettingsSection.main.rawValue, MainOptions.blackTheme.rawValue] {
-            let brightThemeForced = userDefaults.integer(forKey: kVLCSettingAppTheme) == kVLCSettingAppThemeBright
-            return brightThemeForced ? 0 : automaticDimension //If the user wants the bright theme, we hide black theme settings
-        }
-        if indexPath == [SettingsSection.privacy.rawValue, PrivacyOptions.enableBiometrics.rawValue] {
-            let isPasscodeOn = userDefaults.bool(forKey: kVLCSettingPasscodeOnKey)
-            let privacySection = PrivacyOptions(rawValue: indexPath.row)
-            if privacySection?.preferenceKey == nil {
-                //LAContext canEvaluatePolicy supports iOS 11.0.1 and above.
-                //If canEvaluatePolicy is not supported the preference key for the biometric row is nil.
-                //Therefore we never show the biometric options row in this case
-                return 0
-            }
-            return isPasscodeOn ? automaticDimension : 0 //If Passcode Lock is turned off we hide the biometric options row
-        }
-        return automaticDimension
+        SettingsCell.height(
+            for: settingsSections[indexPath.section].items[indexPath.item],
+            width: self.tableView.bounds.width
+        )
     }
 }
 
@@ -473,14 +384,14 @@ extension SettingsController: MediaLibraryDeviceBackupDelegate {
     func medialibraryDidStartExclusion() {
         DispatchQueue.main.async {
             self.isBackingUp = true
-            self.tableView.reloadData()
+            self.reloadSettingsSections()
         }
     }
 
     func medialibraryDidCompleteExclusion() {
         DispatchQueue.main.async {
             self.isBackingUp = false
-            self.tableView.reloadData()
+            self.reloadSettingsSections()
         }
     }
 }
@@ -488,55 +399,107 @@ extension SettingsController: MediaLibraryDeviceBackupDelegate {
 extension SettingsController: MediaLibraryHidingDelegate {
     func medialibraryDidStartHiding() {
         DispatchQueue.main.async {
-            self.tableView.reloadData()
+            self.reloadSettingsSections()
         }
     }
 
     func medialibraryDidCompleteHiding() {
         DispatchQueue.main.async {
-            self.tableView.reloadData()
+            self.reloadSettingsSections()
         }
     }
 }
 
 // MARK: - SwitchOn Delegates
 
-extension SettingsController: BlackThemeActivateDelegate {
-    func blackThemeSwitchOn(state: Bool) {
-        PresentationTheme.themeDidUpdate()
+extension SettingsController: SettingsCellDelegate {
+    func settingsCellDidChangeSwitchState(cell: SettingsCell, preferenceKey: String, isOn: Bool) {
+
+        switch preferenceKey {
+        case kVLCSettingPasscodeOnKey:
+            passcodeLockSwitchOn(state: isOn)
+        case kVLCSettingHideLibraryInFilesApp:
+            medialibraryHidingLockSwitchOn(state: isOn)
+        case kVLCSettingBackupMediaLibrary:
+            mediaLibraryBackupActivateSwitchOn(state: isOn)
+        case kVLCSettingsDisableGrouping:
+            medialibraryDisableGroupingSwitchOn(state: isOn)
+        default:
+            break
+        }
+    }
+
+    func settingsCellInfoButtonPressed(cell: SettingsCell, preferenceKey: String) {
+        guard let settingSpecifier = getSettingsSpecifier(for: preferenceKey) else {
+            return
+        }
+
+        let title = settingsBundle.localizedString(forKey: settingSpecifier.title, value: settingSpecifier.title, table: "Root")
+        let alert = UIAlertController(title: title,
+                                      message: settingsBundle.localizedString(forKey: settingSpecifier.infobuttonvalue,
+                                                                              value: settingSpecifier.infobuttonvalue,
+                                                                              table: "Root"),
+                                      preferredStyle: .actionSheet)
+        let donetitle = NSLocalizedString("BUTTON_DONE", comment: "")
+        alert.addAction(UIAlertAction(title: donetitle, style: .cancel, handler: nil))
+
+        // Set up the popoverPresentationController to avoid crash issues on iPad.
+        alert.popoverPresentationController?.sourceView = cell
+        alert.popoverPresentationController?.permittedArrowDirections = .any
+        alert.popoverPresentationController?.sourceRect = cell.bounds
+
+        UIApplication.shared.keyWindow?.rootViewController?.present(alert, animated: true, completion: nil)
     }
 }
 
-extension SettingsController: PasscodeActivateDelegate {
+extension SettingsController {
 
     func passcodeLockSwitchOn(state: Bool) {
         if state {
-            guard let passcodeLockController = PasscodeLockController(action: .set) else { return }
+            let passcodeLockController = PasscodeLockController(action: .set)
             let passcodeNavigationController = UINavigationController(rootViewController: passcodeLockController)
             passcodeNavigationController.modalPresentationStyle = .fullScreen
             present(passcodeNavigationController, animated: true) {
-                self.tableView.reloadData() //To show/hide biometric row
+                self.reloadSettingsSections() //To show/hide biometric row
             }
         } else {
-            tableView.reloadData()
+            reloadSettingsSections()
         }
     }
 }
 
-extension SettingsController: MedialibraryHidingActivateDelegate {
+extension SettingsController {
     func medialibraryHidingLockSwitchOn(state: Bool) {
         mediaLibraryService.hideMediaLibrary(state)
     }
 }
 
-extension SettingsController: MediaLibraryBackupActivateDelegate {
+extension SettingsController {
     func mediaLibraryBackupActivateSwitchOn(state: Bool) {
         mediaLibraryService.excludeFromDeviceBackup(state)
     }
 }
 
-extension SettingsController: MediaLibraryDisableGroupingDelegate {
+extension SettingsController {
     func medialibraryDisableGroupingSwitchOn(state: Bool) {
         notificationCenter.post(name: .VLCDisableGroupingDidChangeNotification, object: self)
+    }
+}
+
+extension SettingsController: ActionSheetSpecifierDelegate {
+    func actionSheetSpecifierHandleToggleSwitch(for cell: ActionSheetCell, state: Bool) {
+        switch cell.identifier {
+        case .blackBackground:
+            userDefaults.setValue(state, forKey: kVLCSettingAppThemeBlack)
+            PresentationTheme.themeDidUpdate()
+        case .playNextItem:
+            userDefaults.setValue(state, forKey: kVLCAutomaticallyPlayNextItem)
+            break
+        case .playlistPlayNextItem:
+            userDefaults.setValue(state, forKey: kVLCPlaylistPlayNextItem)
+            break
+        default:
+            break
+        }
     }
 }

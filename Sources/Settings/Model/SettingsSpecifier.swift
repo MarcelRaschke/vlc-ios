@@ -14,6 +14,8 @@ import Foundation
 struct SettingSpecifier {
     let title: String
     let preferenceKey: String
+    let infobuttonvalue: String
+    let defaultValue: Any?
     let specifier: [Specifier]
 }
 
