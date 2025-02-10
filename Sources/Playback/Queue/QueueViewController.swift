@@ -5,13 +5,19 @@
  *
  * Authors: Soomin Lee <bubu@mikan.io>
  *          Edgar Fouillet <vlc # edgar.fouillet.eu>
+ *          Diogo Simao Marques <dogo@videolabs.io>
  *
  * Refer to the COPYING file of the official project for license.
  *****************************************************************************/
 
+extension Notification.Name {
+    static let VLCDidAppendMediaToQueue = Notification.Name("didAppendMediaToQueue")
+    static let VLCDidRemoveMediaFromQueue = Notification.Name("didRemoveMediaFromQueue")
+}
+
 @objc(VLCQueueViewControllerDelegate)
 protocol QueueViewControllerDelegate {
-    func queueViewControllerDidDisappear(_ queueViewController: QueueViewController?)
+    @objc optional func queueViewControllerDidDisappear(_ queueViewController: QueueViewController?)
 }
 
 class QueueViewFlowLayout: UICollectionViewFlowLayout {
@@ -42,6 +48,7 @@ class QueueViewController: UIViewController {
     @IBOutlet weak var closeButton: UIButton!
 
     private var scrolledCellIndex: IndexPath = IndexPath()
+    private var grabbedCellIndex: IndexPath?
 
     private let cellHeight: CGFloat = 56
 
@@ -58,9 +65,10 @@ class QueueViewController: UIViewController {
             PlaybackService.sharedInstance()
         }
     }
+
     private var mediaList: VLCMediaList {
         get {
-            PlaybackService.sharedInstance().mediaList
+            playbackService.isShuffleMode ? PlaybackService.sharedInstance().shuffledList : PlaybackService.sharedInstance().mediaList
         }
     }
 
@@ -77,6 +85,8 @@ class QueueViewController: UIViewController {
         }
     }
     var bottomConstraint: NSLayoutConstraint?
+
+    var heightConstraint: NSLayoutConstraint?
 
     private var darkOverlayView: UIView = UIView()
     private var darkOverlayViewConstraints: [NSLayoutConstraint] = []
@@ -98,19 +108,27 @@ class QueueViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         initViews()
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(themeDidChange),
-                                               name: .VLCThemeDidChangeNotification,
-                                               object: nil)
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(deviceOrientationDidChange),
-                                               name: UIDevice.orientationDidChangeNotification,
-                                               object: nil)
+
+        let defaultCenter: NotificationCenter = NotificationCenter.default
+        defaultCenter.addObserver(self,
+                                  selector: #selector(themeDidChange),
+                                  name: .VLCThemeDidChangeNotification,
+                                  object: nil)
+        defaultCenter.addObserver(self,
+                                  selector: #selector(deviceOrientationDidChange),
+                                  name: UIDevice.orientationDidChangeNotification,
+                                  object: nil)
+        defaultCenter.addObserver(self,
+                                  selector: #selector(reload),
+                                  name: Notification.Name(VLCPlaybackServiceShuffleModeUpdated),
+                                  object: nil)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        delegate?.queueViewControllerDidDisappear(self)
+        if let delegate = delegate as? VideoPlayerViewController {
+            delegate.queueViewControllerDidDisappear(self)
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -133,7 +151,11 @@ class QueueViewController: UIViewController {
                 darkOverlayView.bottomAnchor.constraint(equalTo: parent.view.bottomAnchor)
             ]
 
-            let heightConstraint: NSLayoutConstraint?
+            if let heightConstraint = heightConstraint {
+                view.removeConstraint(heightConstraint)
+            }
+
+            var miniPlayerView: AudioMiniPlayer? = nil
             if let parent = parent as? VLCPlayerDisplayController, let miniPlaybackView = parent.miniPlaybackView as? AudioMiniPlayer {
                 grabberView.isHidden = true
                 closeButton.isHidden = true
@@ -141,25 +163,47 @@ class QueueViewController: UIViewController {
                 topConstraint = view.topAnchor.constraint(equalTo: miniPlaybackView.bottomAnchor)
                 heightConstraint = nil
                 bottomConstraint = view.bottomAnchor.constraint(equalTo: parent.view.bottomAnchor)
+                miniPlayerView = miniPlaybackView
             } else {
                 grabberView.isHidden = false
                 closeButton.isHidden = false
                 if let parent = parent as? VideoPlayerViewController {
                     topConstraint = nil
                     heightConstraint = view.heightAnchor.constraint(equalTo: parent.view.heightAnchor,
-                                                                    constant: -(topConstraintConstant + parent.videoPlayerControls.frame.height + parent.scrubProgressBar.frame.height))
+                                                                    constant: -(topConstraintConstant + parent.videoPlayerControls.frame.height + parent.mediaScrubProgressBar.frame.height))
                     bottomConstraint = view.bottomAnchor.constraint(equalTo: parent.view.bottomAnchor,
                                                                     constant: self.view.frame.height)
+                } else if let parent = parent as? AudioPlayerViewController {
+                    heightConstraint = nil
+                    grabberView.isHidden = true
+                    closeButton.isHidden = true
+                    topConstraint = view.topAnchor.constraint(equalTo: parent.audioPlayerView.playqueueView.topAnchor)
+                    bottomConstraint = view.bottomAnchor.constraint(equalTo: parent.audioPlayerView.playqueueView.bottomAnchor)
+                    darkOverlayView.isHidden = true
                 } else {
                     topConstraint = view.topAnchor.constraint(equalTo: parent.view.bottomAnchor)
                     heightConstraint = nil
                     bottomConstraint = view.bottomAnchor.constraint(equalTo: parent.view.bottomAnchor)
                 }
             }
+
             parent.view.addSubview(view)
+
+            let leadingAnchor: NSLayoutXAxisAnchor
+            let trailingAnchor: NSLayoutXAxisAnchor
+            let safeArea: UILayoutGuide
+            if let miniPlayerView = miniPlayerView {
+                safeArea = miniPlayerView.safeAreaLayoutGuide
+            } else {
+                safeArea = parent.view.safeAreaLayoutGuide
+            }
+            
+            leadingAnchor = safeArea.leadingAnchor
+            trailingAnchor = safeArea.trailingAnchor
+
             constraints = [
-                view.leadingAnchor.constraint(equalTo: parent.view.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: parent.view.trailingAnchor)
+                view.leadingAnchor.constraint(equalTo: leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: trailingAnchor)
             ]
 
             if let topConstraint = topConstraint {
@@ -196,7 +240,9 @@ class QueueViewController: UIViewController {
         UIView.animate(withDuration: animationDuration, animations: {
             self.view.alpha = 1.0
             self.darkOverlayView.isHidden = false
-        })
+        }) { _ in
+            self.scrollToCurrentlyPlaying()
+        }
     }
 
     @objc func hide() {
@@ -209,6 +255,29 @@ class QueueViewController: UIViewController {
             self.view.alpha = 0.0
             self.darkOverlayView.isHidden = true
         })
+    }
+
+    private func scrollToCurrentlyPlaying() {
+        guard let currentMedia = playbackService.currentlyPlayingMedia else {
+            return
+        }
+
+        let currentIndex = mediaList.index(of: currentMedia)
+
+        guard currentIndex != NSNotFound else {
+            return
+        }
+
+        guard currentIndex < mediaList.count else {
+            return
+        }
+
+        let currentIndexPath = IndexPath(row: Int(currentIndex), section: 0)
+
+        // Dispatch the scrolling operation to the main queue to ensure UI updates are processed first
+        DispatchQueue.main.async {
+            self.queueCollectionView.scrollToItem(at: currentIndexPath, at: .centeredVertically, animated: true)
+        }
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -260,13 +329,18 @@ class QueueViewController: UIViewController {
         })
     }
 
+    func dismissFromAudioPlayer() {
+        UIView.animate(withDuration: animationDuration, animations: {
+            self.view.alpha = 0.0
+        }, completion: { _ in
+            self.view.removeFromSuperview()
+            self.removeFromParent()
+        })
+    }
+
     @objc private func dismissPlayqueue() {
         if let parent = parent {
-            var newY: CGFloat = view.frame.height
-            if #available(iOS 11.0, *) {
-                newY -= view.safeAreaInsets.bottom
-            }
-            bottomConstraint?.constant = newY
+            bottomConstraint?.constant = view.frame.height - view.safeAreaInsets.bottom
             UIView.animate(withDuration: animationDuration, animations: {
                 parent.view.layoutIfNeeded()
             }, completion: { _ in
@@ -373,9 +447,6 @@ private extension QueueViewController {
         if isSelected {
             textColor = PresentationTheme.current.colors.orangeUI
             tintColor = PresentationTheme.current.colors.orangeUI
-            cell.disableScrollView()
-        } else {
-            cell.enableScrollView()
         }
 
         cell.tintColor = tintColor
@@ -398,21 +469,44 @@ private extension QueueViewController {
                     break
             }
             queueCollectionView.beginInteractiveMovementForItem(at: selectedIndexPath)
+            grabbedCellIndex = selectedIndexPath
         case .changed:
             var location = gesture.location(in: gesture.view)
             location.x = queueCollectionView.frame.width / 2
             queueCollectionView.updateInteractiveMovementTargetPosition(location)
+            if let selectedIndexPath = queueCollectionView.indexPathForItem(at: gesture.location(in: queueCollectionView)) {
+                grabbedCellIndex = selectedIndexPath
+            }
         case .ended:
             queueCollectionView.endInteractiveMovement()
+            var indexPath: IndexPath? = nil
+
+            if let selectedIndexPath = queueCollectionView.indexPathForItem(at: gesture.location(in: queueCollectionView)) {
+                indexPath = selectedIndexPath
+            } else if let grabbedCellIndex = grabbedCellIndex {
+                indexPath = grabbedCellIndex
+            }
+
+            guard let index = indexPath,
+                  let cell = queueCollectionView.cellForItem(at: index) as? MediaCollectionViewCell else {
+                break
+            }
+
+            cell.animateCurrentlyPlayingState()
+            break
         default:
             queueCollectionView.cancelInteractiveMovement()
         }
     }
 
     @objc private func dismissView() {
+        guard let delegate = delegate as? VideoPlayerViewController else {
+            return
+        }
+
         dismiss(animated: true) {
             [weak self] in
-            self?.delegate?.queueViewControllerDidDisappear(self)
+            delegate.queueViewControllerDidDisappear(self)
         }
     }
 }
@@ -423,7 +517,7 @@ extension QueueViewController: UICollectionViewDelegateFlowLayout {
     func collectionView(_ collectionView: UICollectionView,
                         layout collectionViewLayout: UICollectionViewLayout,
                         sizeForItemAt indexPath: IndexPath) -> CGSize {
-        return CGSize(width: collectionView.frame.width - (sidePadding * 2), height: cellHeight)
+        return MediaCollectionViewCell.cellSizeForWidth(collectionView.frame.width - (sidePadding * 2))
     }
 
     func collectionView(_ collectionView: UICollectionView,
@@ -442,17 +536,16 @@ extension QueueViewController: UICollectionViewDelegate, MediaCollectionViewCell
             assertionFailure("QueueViewController: didSelectItemAt: IndexPath out of range.")
             return
         }
-        let media = mediaList.media(at: UInt(indexPath.row))
-        let isPlaying = playbackService.currentlyPlayingMedia == media
-        if !isPlaying {
-            playbackService.playItem(at: UInt(indexPath.row))
-            guard let cell = collectionView.cellForItem(at: indexPath) as? MediaCollectionViewCell else {
-                assertionFailure("QueueViewController: didSelectItemAt: Cell not a MediaCollectionViewCell")
-                return
-            }
-            updateCollectionViewCellApparence(cell, isSelected: true)
-            reload()
+
+        playbackService.playItem(at: UInt(indexPath.row))
+
+        guard let cell = collectionView.cellForItem(at: indexPath) as? MediaCollectionViewCell else {
+            assertionFailure("QueueViewController: didSelectItemAt: Cell not a MediaCollectionViewCell")
+            return
         }
+
+        updateCollectionViewCellApparence(cell, isSelected: true)
+        reload()
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -472,6 +565,7 @@ extension QueueViewController: UICollectionViewDelegate, MediaCollectionViewCell
         resetScrollView({ _ in
             self.mediaList.removeMedia(at: UInt(indexPath.row))
             self.reload()
+            NotificationCenter.default.post(name: .VLCDidRemoveMediaFromQueue, object: nil)
         })
     }
 
@@ -502,6 +596,10 @@ extension QueueViewController: UICollectionViewDelegate, MediaCollectionViewCell
             return cell
         }
 
+        return nil
+    }
+
+    func mediaCollectionViewCellGetModel() -> MediaLibraryBaseModel? {
         return nil
     }
 }
@@ -581,7 +679,7 @@ extension QueueViewController: UICollectionViewDataSource {
 
         var media: VLCMedia?
 
-        cell.thumbnailWidth.constant = cell.frame.height
+        cell.thumbnailWidth.constant = cell.getDefaultConstant()
 
         cell.ignoreThemeDidChange = true
         cell.setTheme(to: PresentationTheme.darkTheme)
@@ -605,6 +703,7 @@ extension QueueViewController: UICollectionViewDataSource {
             cell.media = media
         }
         cell.newLabel.isHidden = true
+
         return cell
     }
 }

@@ -1,53 +1,46 @@
 /*****************************************************************************
-* SettingsCell.swift
-* VLC for iOS
-*****************************************************************************
-* Copyright (c) 2020 VideoLAN. All rights reserved.
-*
-* Authors: Swapnanil Dhol <swapnanildhol # gmail.com>
-*
-* Refer to the COPYING file of the official project for license.
-*****************************************************************************/
+ * SettingsCell.swift
+ * VLC for iOS
+ *****************************************************************************
+ * Copyright (c) 2020 VideoLAN. All rights reserved.
+ *
+ * Authors: Swapnanil Dhol <swapnanildhol # gmail.com>
+ *
+ * Refer to the COPYING file of the official project for license.
+ *****************************************************************************/
 
 import UIKit
 
-protocol SectionType: CustomStringConvertible {
-    var containsSwitch: Bool { get }
-    var subtitle: String? { get }
-    var preferenceKey: String? { get }
-}
+protocol SettingsCellDelegate: AnyObject {
+    /// Implementations should only perform side effects on
+    /// specific preferences; updating the preference itself
+    /// is handled by the cell.
+    func settingsCellDidChangeSwitchState(cell: SettingsCell, preferenceKey: String, isOn: Bool)
 
-protocol BlackThemeActivateDelegate: AnyObject {
-    func blackThemeSwitchOn(state: Bool)
-}
-
-protocol PasscodeActivateDelegate: AnyObject {
-    func passcodeLockSwitchOn(state: Bool)
-}
-
-protocol MedialibraryHidingActivateDelegate: AnyObject {
-    func medialibraryHidingLockSwitchOn(state: Bool)
-}
-
-protocol MediaLibraryBackupActivateDelegate: AnyObject {
-    func mediaLibraryBackupActivateSwitchOn(state: Bool)
-}
-
-protocol MediaLibraryDisableGroupingDelegate: AnyObject {
-    func medialibraryDisableGroupingSwitchOn(state: Bool)
+    func settingsCellInfoButtonPressed(cell: SettingsCell, preferenceKey: String)
 }
 
 class SettingsCell: UITableViewCell {
+    private enum Constants {
+        static let mainLabelFont: UIFont = .preferredFont(forTextStyle: .callout) // 16pt default
+        static let subtitleLabelFont: UIFont = .preferredFont(forTextStyle: .footnote) // 13pt default
+        static let numberOfLines = 2
+        static let minHeight: CGFloat = 44
+        static let marginTop: CGFloat = 10
+        static let marginBottom: CGFloat = 10
+        static let marginLeading: CGFloat = 20
+        static let marginTrailing: CGFloat = 70
+    }
 
-    private let userDefaults = UserDefaults.standard
-    private let notificationCenter = NotificationCenter.default
-    var settingsBundle = Bundle()
-    var showsActivityIndicator = false
-    weak var blackThemeSwitchDelegate: BlackThemeActivateDelegate?
-    weak var passcodeSwitchDelegate: PasscodeActivateDelegate?
-    weak var medialibraryHidingSwitchDelegate: MedialibraryHidingActivateDelegate?
-    weak var mediaLibraryBackupSwitchDelegate: MediaLibraryBackupActivateDelegate?
-    weak var medialibraryDisableGroupingSwitchDelegate: MediaLibraryDisableGroupingDelegate?
+    weak var delegate: SettingsCellDelegate?
+
+    var toggleObserver: (SettingsItem.Toggle, Int)? {
+        willSet {
+            if let toggleObserver = toggleObserver {
+                toggleObserver.0.removeObserver(toggleObserver.1)
+            }
+        }
+    }
 
     lazy var switchControl: UISwitch = {
         let switchControl = UISwitch()
@@ -59,6 +52,14 @@ class SettingsCell: UITableViewCell {
         return switchControl
     }()
 
+    lazy var infoButton: UIButton = {
+        var infoButton = UIButton()
+        let buttonType: UIButton.ButtonType = PresentationTheme.current.isDark ? .infoDark : .infoLight
+        infoButton = UIButton(type: buttonType)
+        infoButton.addTarget(self, action: #selector(infoTapped), for: .touchDown)
+        return infoButton
+    }()
+
     let activityIndicator: UIActivityIndicatorView = {
         let activityIndicator = UIActivityIndicatorView()
         activityIndicator.translatesAutoresizingMaskIntoConstraints = false
@@ -68,9 +69,9 @@ class SettingsCell: UITableViewCell {
     let mainLabel: UILabel = {
         let label = UILabel()
         let colors = PresentationTheme.current.colors
-        label.numberOfLines = 2
+        label.numberOfLines = Constants.numberOfLines
         label.textColor = colors.cellTextColor
-        label.font = .preferredFont(forTextStyle: .callout) //16pt default
+        label.font = Constants.mainLabelFont
         label.translatesAutoresizingMaskIntoConstraints = false
         return label
     }()
@@ -78,8 +79,8 @@ class SettingsCell: UITableViewCell {
     let subtitleLabel: UILabel = {
         let label = UILabel()
         let colors = PresentationTheme.current.colors
-        label.font = .preferredFont(forTextStyle: .footnote) //13pt default
-        label.numberOfLines = 2
+        label.font = Constants.subtitleLabelFont
+        label.numberOfLines = Constants.numberOfLines
         label.textColor = colors.cellDetailTextColor
         label.translatesAutoresizingMaskIntoConstraints = false
         return label
@@ -93,42 +94,120 @@ class SettingsCell: UITableViewCell {
         return stackView
     }()
 
-    var sectionType: SectionType? {
+    static func height(for settingsItem: SettingsItem, width: CGFloat) -> CGFloat {
+        let w = max(width - (Constants.marginLeading + Constants.marginTrailing), 1)
+
+        measurementTitleLabel.text = settingsItem.title
+        measurementSubitleLabel.text = settingsItem.subtitle
+
+        let rect = CGRect(origin: .zero, size: CGSize(width: w, height: .greatestFiniteMagnitude))
+
+        let titleHeight = measurementTitleLabel
+            .textRect(forBounds: rect, limitedToNumberOfLines: Constants.numberOfLines).height
+
+        let subtitleHeight = measurementSubitleLabel
+            .textRect(forBounds: rect, limitedToNumberOfLines: Constants.numberOfLines).height
+
+        return max(
+            Constants.marginTop + titleHeight + subtitleHeight + Constants.marginBottom,
+            Constants.minHeight
+        )
+    }
+
+    private static let measurementTitleLabel: UILabel = {
+        let label = UILabel()
+        label.numberOfLines = Constants.numberOfLines
+        label.font = Constants.mainLabelFont
+        return label
+    }()
+
+    private static let measurementSubitleLabel: UILabel = {
+        let label = UILabel()
+        label.numberOfLines = Constants.numberOfLines
+        label.font = Constants.subtitleLabelFont
+        return label
+    }()
+
+    var settingsItem: SettingsItem? {
+        willSet {
+            toggleObserver = nil
+        }
+
         didSet {
-            guard let sectionType = sectionType else {
-                assertionFailure("No Section Type provided")
+            guard let settingsItem = settingsItem else {
                 return
             }
-            mainLabel.text = settingsBundle.localizedString(forKey: sectionType.description, value: sectionType.description, table: "Root")
-            if let subtitle = sectionType.subtitle {
-                //Handles No Value (No user-defaults value set) case
-                subtitleLabel.text = settingsBundle.localizedString(forKey: subtitle, value: subtitle, table: "Root")
-            }
-            else {
-                subtitleLabel.text = sectionType.subtitle
-            }
-            switchControl.isHidden = !sectionType.containsSwitch
-            if switchControl.isHidden {
+
+            mainLabel.text = settingsItem.title
+
+            mainLabel.textColor = settingsItem.isTitleEmphasized
+                ? PresentationTheme.current.colors.orangeUI
+                : PresentationTheme.current.colors.cellTextColor
+
+            subtitleLabel.text = settingsItem.subtitle
+            subtitleLabel.isHidden = settingsItem.subtitle?.isEmpty ?? true
+
+            switch settingsItem.action {
+            case .isLoading:
+                switchControl.isHidden = true
+                infoButton.isHidden = true
+                activityIndicator.isHidden = false
+                accessoryView = .none
+                accessoryType = .none
+                selectionStyle = .none
+
+            case let .toggle(toggle):
+                switchControl.isHidden = false
+                infoButton.isHidden = true
+                activityIndicator.isHidden = true
+                accessoryView = switchControl
+                accessoryType = .none
+                selectionStyle = .none
+
+                switchControl.isOn = toggle.isOn
+                let obs = toggle.addObserver { [weak self] isOn in
+                    self?.switchControl.isOn = isOn
+                }
+                toggleObserver = (toggle, obs)
+
+            case let .showActionSheet(_, _, hasInfo):
+                switchControl.isHidden = true
+                infoButton.isHidden = !hasInfo
+                activityIndicator.isHidden = true
                 accessoryView = .none
                 accessoryType = .disclosureIndicator
                 selectionStyle = .default
+
+            case .donation:
+                switchControl.isHidden = true
+                infoButton.isHidden = true
+                activityIndicator.isHidden = true
+                accessoryView = .none
+                accessoryType = .disclosureIndicator
+                selectionStyle = .default
+
+            case .openPrivacySettings:
+                switchControl.isHidden = true
+                infoButton.isHidden = true
+                activityIndicator.isHidden = true
+                accessoryView = .none
+                accessoryType = .disclosureIndicator
+                selectionStyle = .default
+
+            case .forceRescanAlert, .exportMediaLibrary, .displayResetAlert:
+                switchControl.isHidden = true
+                infoButton.isHidden = true
+                activityIndicator.isHidden = true
+                accessoryView = .none
+                accessoryType = .none
+                selectionStyle = .default
             }
-            else {
-                //When Media Library is adding or removing files to device backup
-                //We show a Activity Indicator instead of a switch while the process
-                //is going on. On completion, we show the switch again
-                if showsActivityIndicator && sectionType.preferenceKey == kVLCSettingBackupMediaLibrary {
-                    activityIndicator.isHidden = false
-                    accessoryView = .none
-                    selectionStyle = .none
-                } else {
-                    activityIndicator.isHidden = true
-                    accessoryView = switchControl
-                    selectionStyle = .none
-                }
+
+            if !activityIndicator.isHidden {
+                activityIndicator.startAnimating()
+            } else {
+                activityIndicator.stopAnimating()
             }
-            updateSwitch()
-            updateSubtitle()
         }
     }
 
@@ -137,75 +216,58 @@ class SettingsCell: UITableViewCell {
         setup()
     }
 
-    required init?(coder: NSCoder) {
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        backgroundColor = .clear //Required to prevent theme mismatch during themeDidChange Notification
+        backgroundColor = .clear // Required to prevent theme mismatch during setupTheme
         activityIndicator.isHidden = true
 
         // Reset to default colors.
-        themeDidChange()
+        setupTheme()
+
+        settingsItem = nil
+        delegate = nil
     }
 
     private func setup() {
         setupView()
-        setupObservers()
-        themeDidChange()
+        setupTheme()
     }
 
     private func setupView() {
-
-        var guide: LayoutAnchorContainer = self
-        if #available(iOS 11.0, *) {
-            guide = safeAreaLayoutGuide
-        }
-        addSubview(stackView)
-        addSubview(activityIndicator)
+        contentView.addSubview(stackView)
         stackView.addArrangedSubview(mainLabel)
         stackView.addArrangedSubview(subtitleLabel)
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 20),
-            stackView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 10),
-            stackView.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -10),
-            stackView.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -70),
-            activityIndicator.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -30),
-            activityIndicator.centerYAnchor.constraint(equalTo: stackView.centerYAnchor)
+            stackView.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: Constants.marginLeading),
+            stackView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: Constants.marginTop),
+            stackView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -Constants.marginBottom),
+            stackView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -Constants.marginTrailing),
         ])
+
+        contentView.addSubview(activityIndicator)
         activityIndicator.isHidden = true
+        NSLayoutConstraint.activate([
+            activityIndicator.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -30),
+            activityIndicator.centerYAnchor.constraint(equalTo: stackView.centerYAnchor),
+        ])
+
+        contentView.addSubview(infoButton)
+        infoButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            infoButton.centerYAnchor.constraint(equalTo: stackView.centerYAnchor),
+            infoButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -40),
+        ])
+        infoButton.isHidden = true
     }
 
-    private func setupObservers() {
-        notificationCenter.addObserver(self,
-                                       selector: #selector(themeDidChange),
-                                       name: .VLCThemeDidChangeNotification,
-                                       object: nil)
-        notificationCenter.addObserver(self,
-                                       selector: #selector(updateValues),
-                                       name: UserDefaults.didChangeNotification,
-                                       object: nil)
-    }
-
-    @objc func handleSwitchAction(sender: UISwitch) {
-        guard let key = sectionType?.preferenceKey else { return }
-        userDefaults.set(sender.isOn ? true : false, forKey: key)
-        if sectionType?.preferenceKey == kVLCSettingAppThemeBlack {
-            blackThemeSwitchDelegate?.blackThemeSwitchOn(state: sender.isOn)
-        } else if sectionType?.preferenceKey == kVLCSettingPasscodeOnKey {
-            passcodeSwitchDelegate?.passcodeLockSwitchOn(state: sender.isOn)
-        } else if sectionType?.preferenceKey == kVLCSettingHideLibraryInFilesApp {
-            medialibraryHidingSwitchDelegate?.medialibraryHidingLockSwitchOn(state: sender.isOn)
-        } else if sectionType?.preferenceKey == kVLCSettingBackupMediaLibrary {
-            mediaLibraryBackupSwitchDelegate?.mediaLibraryBackupActivateSwitchOn(state: sender.isOn)
-        } else if sectionType?.preferenceKey == kVLCSettingsDisableGrouping {
-            medialibraryDisableGroupingSwitchDelegate?.medialibraryDisableGroupingSwitchOn(state: sender.isOn)
-        }
-    }
-
-    @objc fileprivate func themeDidChange() {
+    private func setupTheme() {
         let colors = PresentationTheme.current.colors
+        backgroundColor = colors.background
         selectedBackgroundView?.backgroundColor = colors.mediaCategorySeparatorColor
         mainLabel.textColor = colors.cellTextColor
         subtitleLabel.textColor = colors.cellDetailTextColor
@@ -220,23 +282,30 @@ class SettingsCell: UITableViewCell {
         }
     }
 
-    @objc private func updateValues() {
-        DispatchQueue.main.async {
-            self.updateSwitch()
-            self.updateSubtitle()
+    @objc func handleSwitchAction(sender: UISwitch) {
+        guard let settingsItem = settingsItem else { return }
+
+        switch settingsItem.action {
+        case let .toggle(toggle):
+            toggle.set(isOn: sender.isOn)
+            delegate?.settingsCellDidChangeSwitchState(cell: self, preferenceKey: toggle.preferenceKey, isOn: sender.isOn)
+
+        default:
+            // we should never get here; only toggles have a switch
+            break
         }
     }
 
-    private func updateSwitch() {
-        if let key = self.sectionType?.preferenceKey {
-            let value = self.userDefaults.bool(forKey: key)
-            self.switchControl.isOn = value ? true : false
-        }
-    }
+    @objc func infoTapped(sender _: UIButton) {
+        guard let settingsItem = settingsItem else { return }
 
-    private func updateSubtitle() {
-        if let subtitle = self.getSubtitle(for: self.sectionType?.preferenceKey ?? "") {
-            self.subtitleLabel.text = settingsBundle.localizedString(forKey: subtitle, value: subtitle, table: "Root")
+        switch settingsItem.action {
+        case let .showActionSheet(_, preferenceKey, _):
+            delegate?.settingsCellInfoButtonPressed(cell: self, preferenceKey: preferenceKey)
+
+        default:
+            // should never get here; only action sheets have info buttons
+            break
         }
     }
 }

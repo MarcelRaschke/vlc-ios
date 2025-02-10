@@ -6,7 +6,7 @@ default:
     before_script:
         - arch -x86_64 pod update
     tags:
-        - monterey-m1-lasvegas
+        - macos-xcode15
     interruptible: true
 
 variables:
@@ -24,7 +24,7 @@ variables:
 .build-base:
     script:
         - xcodebuild -version
-        - xcodebuild -verbose -workspace "VLC.xcworkspace" -scheme "$BUILD_SCHEME" -configuration "Debug" clean build -destination "$BUILD_DESTINATION"
+        - xcodebuild -verbose -workspace "VLC.xcworkspace" -scheme "$BUILD_SCHEME" -configuration "Debug" clean build -destination "$BUILD_DESTINATION" CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
 
 ## Lint
 
@@ -85,7 +85,7 @@ tvOS 15.x:
         - .job-base
         - .build-base
     tags:
-        - monterey-m1-lasvegas
+        - macos-xcode15
     stage: build
     variables:
         BUILD_SCHEME: "VLC-tvOS"
